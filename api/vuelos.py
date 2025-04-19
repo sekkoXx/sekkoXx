@@ -5,7 +5,7 @@ from schemas.vuelo_schema import VueloCrear, VueloRespuesta
 from core.lista_vuelos import ListaVuelos
 
 router = APIRouter()
-lista_vuelos = ListaVuelos()  # Estructura en memoria
+lista_vuelos = ListaVuelos()
 
 def get_db():
     db = database.SessionLocal()
@@ -16,12 +16,16 @@ def get_db():
 
 @router.post("/vuelos/", response_model=VueloRespuesta)
 def agregar_vuelo(vuelo: VueloCrear, db: Session = Depends(get_db)):
+    # Verificar si ya existe el vuelo con ese ID
+    if db.query(models.Vuelo).filter(models.Vuelo.id == vuelo.id).first():
+        raise HTTPException(status_code=400, detail="El ID ya está registrado.")
+
     nuevo_vuelo = models.Vuelo(**vuelo.dict())
     db.add(nuevo_vuelo)
     db.commit()
     db.refresh(nuevo_vuelo)
 
-    # Agrega a la estructura en memoria
+    # Insertar en la lista enlazada
     if vuelo.emergencia:
         lista_vuelos.insertar_al_frente(vuelo.dict())
     else:
@@ -40,12 +44,24 @@ def obtener_proximo():
         raise HTTPException(status_code=404, detail="No hay vuelos en la lista")
     return vuelo
 
-@router.delete("/vuelos/{pos}", response_model=VueloCrear)
-def eliminar_vuelo(pos: int):
-    vuelo = lista_vuelos.extraer_de_posicion(pos)
-    if not vuelo:
-        raise HTTPException(status_code=404, detail="Posición inválida o lista vacía")
-    return vuelo
+@router.delete("/vuelos/{id}", response_model=VueloCrear)
+def eliminar_vuelo(id: int, db: Session = Depends(get_db)):
+    vuelo_en_db = db.query(models.Vuelo).filter(models.Vuelo.id == id).first()
+    if not vuelo_en_db:
+        raise HTTPException(status_code=404, detail="Vuelo no encontrado")
+
+    # Eliminar de la base de datos
+    db.delete(vuelo_en_db)
+    db.commit()
+
+    # Eliminar también de la lista en memoria
+    vuelos_actuales = lista_vuelos.listar_vuelos()
+    for i, v in enumerate(vuelos_actuales):
+        if v["id"] == id:
+            lista_vuelos.extraer_de_posicion(i)
+            return v
+
+    raise HTTPException(status_code=404, detail="Vuelo no encontrado en memoria")
 
 @router.get("/vuelos/estructura", response_model=list[VueloCrear])
 def estructura_memoria():
