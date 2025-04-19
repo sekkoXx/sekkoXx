@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from db import models, database
-from schemas.vuelo_schema import VueloCrear, VueloRespuesta
 from core.lista_vuelos import ListaVuelos
 
 router = APIRouter()
 lista_vuelos = ListaVuelos()
 
+# Dependency para la base de datos
 def get_db():
     db = database.SessionLocal()
     try:
@@ -14,63 +14,63 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/vuelos/", response_model=VueloRespuesta)
-def agregar_vuelo(vuelo: VueloCrear, db: Session = Depends(get_db)):
-    # Verificar si ya existe el vuelo con ese ID
-    if db.query(models.Vuelo).filter(models.Vuelo.id == vuelo.id).first():
-        raise HTTPException(status_code=400, detail="El ID ya está registrado.")
+# Crear vuelo
+@router.post("/vuelos")
+def crear_vuelo(id: int, codigo: str, destino: str, emergencia: int = 0, db: Session = Depends(get_db)):
+    if db.query(models.Vuelo).filter(models.Vuelo.id == id).first():
+        raise HTTPException(status_code=400, detail="El vuelo ya existe")
 
-    nuevo_vuelo = models.Vuelo(**vuelo.dict())
+    nuevo_vuelo = models.Vuelo(id=id, codigo=codigo, destino=destino, emergencia=emergencia)
     db.add(nuevo_vuelo)
     db.commit()
-    db.refresh(nuevo_vuelo)
 
-    # Insertar en la lista enlazada
-    if vuelo.emergencia:
-        lista_vuelos.insertar_al_frente(vuelo.dict())
+    datos_vuelo = {
+        "id": id,
+        "codigo": codigo,
+        "destino": destino,
+        "emergencia": emergencia
+    }
+
+    if emergencia:
+        lista_vuelos.insertar_al_frente(datos_vuelo)
     else:
-        lista_vuelos.insertar_al_final(vuelo.dict())
+        lista_vuelos.insertar_al_final(datos_vuelo)
 
-    return nuevo_vuelo
+    return {"mensaje": "Vuelo creado exitosamente"}
 
-@router.get("/vuelos/", response_model=list[VueloRespuesta])
+# Eliminar vuelo por ID
+@router.delete("/vuelos/{id}")
+def eliminar_vuelo(id: int, db: Session = Depends(get_db)):
+    vuelo_db = db.query(models.Vuelo).filter(models.Vuelo.id == id).first()
+    if not vuelo_db:
+        raise HTTPException(status_code=404, detail="Vuelo no encontrado en la base de datos")
+
+    db.delete(vuelo_db)
+    db.commit()
+
+    # También eliminar de la lista en memoria
+    vuelos_memoria = lista_vuelos.listar_vuelos()
+    for i, vuelo in enumerate(vuelos_memoria):
+        if vuelo["id"] == id:
+            lista_vuelos.extraer_de_posicion(i)
+            break
+
+    return {"mensaje": f"Vuelo con ID {id} eliminado"}
+
+# Ver todos los vuelos (BD)
+@router.get("/vuelos")
 def listar_vuelos(db: Session = Depends(get_db)):
     return db.query(models.Vuelo).all()
 
-@router.get("/vuelos/proximo", response_model=VueloCrear)
-def obtener_proximo():
-    vuelo = lista_vuelos.obtener_primero()
-    if not vuelo:
-        raise HTTPException(status_code=404, detail="No hay vuelos en la lista")
-    return vuelo
-
-@router.delete("/vuelos/{id}", response_model=VueloCrear)
-def eliminar_vuelo(id: int, db: Session = Depends(get_db)):
-    vuelo_en_db = db.query(models.Vuelo).filter(models.Vuelo.id == id).first()
-    if not vuelo_en_db:
-        raise HTTPException(status_code=404, detail="Vuelo no encontrado")
-
-    # Eliminar de la base de datos
-    db.delete(vuelo_en_db)
-    db.commit()
-
-    # Eliminar también de la lista en memoria
-    vuelos_actuales = lista_vuelos.listar_vuelos()
-    for i, v in enumerate(vuelos_actuales):
-        if v["id"] == id:
-            lista_vuelos.extraer_de_posicion(i)
-            return v
-
-    raise HTTPException(status_code=404, detail="Vuelo no encontrado en memoria")
-
-@router.get("/vuelos/estructura", response_model=list[VueloCrear])
-def estructura_memoria():
+# Ver vuelos en memoria (estructura actual)
+@router.get("/vuelos/estructura")
+def listar_vuelos_en_memoria():
     return lista_vuelos.listar_vuelos()
 
-@router.post("/vuelos/reordenar")
-def reordenar_lista(nuevo_orden: list[int]):
-    try:
-        lista_vuelos.reordenar(nuevo_orden)
-        return {"mensaje": "Lista reordenada correctamente"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# Obtener el próximo vuelo a despegar
+@router.get("/vuelos/proximo")
+def obtener_proximo_vuelo():
+    vuelo = lista_vuelos.obtener_primero()
+    if not vuelo:
+        raise HTTPException(status_code=404, detail="No hay vuelos pendientes")
+    return vuelo
